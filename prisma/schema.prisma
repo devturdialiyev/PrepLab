@@ -1,0 +1,190 @@
+// Prisma Schema for Dual-Track IELTS & SAT Educational Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------------------
+// USER & ACCESS MODELS
+// -------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String
+  role          String    @default("STUDENT") // STUDENT | TEACHER | TRACK_ADMIN | SUPER_ADMIN
+  trackAccess   String    @default("BOTH")    // IELTS | SAT | BOTH
+  avatar        String?
+  targetScore   String?   // e.g. "Band 7.5" or "1500"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  uploadedMaterials    StudyMaterial[]        @relation("UploadedBy")
+  createdExams         MockExam[]             @relation("CreatedBy")
+  submissions          ExamSubmission[]       @relation("StudentSubmissions")
+  evaluations          SubmissionEvaluation[] @relation("TeacherEvaluations")
+  enrollments          Enrollment[]
+}
+
+model Enrollment {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track       String   // IELTS | SAT
+  status      String   @default("ACTIVE") // ACTIVE | EXPIRED | SUSPENDED
+  enrolledAt  DateTime @default(now())
+  expiresAt   DateTime?
+
+  @@unique([userId, track])
+}
+
+// -------------------------------------------------------------
+// CURRICULUM & STUDY MATERIALS
+// -------------------------------------------------------------
+
+model Course {
+  id          String    @id @default(cuid())
+  title       String
+  description String
+  track       String    // IELTS | SAT
+  thumbnail   String?
+  level       String    @default("ALL_LEVELS") // BEGINNER | INTERMEDIATE | ADVANCED | ALL_LEVELS
+  isPublished Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  lessons     Lesson[]
+}
+
+model Lesson {
+  id          String    @id @default(cuid())
+  courseId    String
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title       String
+  module      String    // LISTENING | READING | WRITING | SPEAKING | MATH | READING_WRITING
+  order       Int       @default(1)
+  content     String?   // Markdown or lesson text
+  videoUrl    String?
+  duration    Int       @default(15) // In minutes
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model StudyMaterial {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?
+  track        String   // IELTS | SAT
+  module       String   // LISTENING | READING | WRITING | SPEAKING | MATH | READING_WRITING | GENERAL
+  fileUrl      String   // Path or external link
+  fileType     String   // PDF | AUDIO | VIDEO | DOC | LINK
+  fileSize     String?  // e.g. "4.2 MB"
+  uploadedById String
+  uploadedBy   User     @relation("UploadedBy", fields: [uploadedById], references: [id], onDelete: Cascade)
+  downloadCount Int     @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// -------------------------------------------------------------
+// EXAM ENGINES & QUESTION BANKS
+// -------------------------------------------------------------
+
+model MockExam {
+  id              String         @id @default(cuid())
+  title           String
+  description     String?
+  track           String         // IELTS | SAT
+  examType        String         @default("FULL_MOCK") // FULL_MOCK | SECTIONAL
+  durationMinutes Int            @default(60)
+  totalQuestions  Int            @default(40)
+  difficulty      String         @default("MEDIUM") // EASY | MEDIUM | HARD | OFFICIAL
+  isPublished     Boolean        @default(true)
+  createdById     String
+  createdBy       User           @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  sections        ExamSection[]
+  submissions     ExamSubmission[]
+}
+
+model ExamSection {
+  id              String     @id @default(cuid())
+  examId          String
+  exam            MockExam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  sectionType     String     // LISTENING | READING | WRITING | SPEAKING | SAT_RW | SAT_MATH
+  title           String
+  order           Int        @default(1)
+  durationMinutes Int        @default(30)
+  audioUrl        String?    // Listening audio track or instructions
+  passageText     String?    // Reading passage or Writing prompt
+
+  questions       Question[]
+}
+
+model Question {
+  id            String         @id @default(cuid())
+  sectionId     String
+  section       ExamSection    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  order         Int            @default(1)
+  type          String         // MULTIPLE_CHOICE | FILL_IN_BLANK | TRUE_FALSE_NOT_GIVEN | ESSAY | AUDIO_RECORDING | STUDENT_PRODUCED_MATH
+  questionText  String
+  passageRef    String?        // Paragraph or line reference
+  optionsJson   String?        // JSON array of options e.g. ["A. ...", "B. ..."]
+  correctAnswer String?        // For auto-graded questions
+  explanation   String?        // Teacher explanation/solution
+  points        Int            @default(1)
+
+  studentAnswers StudentAnswer[]
+}
+
+// -------------------------------------------------------------
+// SUBMISSIONS & GRADING DESK
+// -------------------------------------------------------------
+
+model ExamSubmission {
+  id                String                 @id @default(cuid())
+  examId            String
+  exam              MockExam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  studentId         String
+  student           User                   @relation("StudentSubmissions", fields: [studentId], references: [id], onDelete: Cascade)
+  status            String                 @default("SUBMITTED") // IN_PROGRESS | SUBMITTED | GRADED
+  rawScore          Int?                   // Correct answer count
+  scaledScore       String?                // e.g. "Band 7.5" or "1450"
+  timeSpentSeconds  Int                    @default(0)
+  submittedAt       DateTime               @default(now())
+
+  answers           StudentAnswer[]
+  evaluation        SubmissionEvaluation?
+}
+
+model StudentAnswer {
+  id            String         @id @default(cuid())
+  submissionId  String
+  submission    ExamSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  studentAnswer String?        // Text answer or Audio URL
+  isCorrect     Boolean?
+  pointsEarned  Int            @default(0)
+}
+
+model SubmissionEvaluation {
+  id                 String         @id @default(cuid())
+  submissionId       String         @unique
+  submission         ExamSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  teacherId          String
+  teacher            User           @relation("TeacherEvaluations", fields: [teacherId], references: [id], onDelete: Cascade)
+  generalFeedback    String?
+  criteriaScoresJson String?        // IELTS 4 criteria or SAT breakdown in JSON
+  bandScore          String?        // e.g. "7.5"
+  gradedAt           DateTime       @default(now())
+}
